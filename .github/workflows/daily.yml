@@ -2,8 +2,8 @@ name: Daily schedule
 
 on:
   schedule:
-    - cron: "30 2 * * *"
-  workflow_dispatch:
+    - cron: "30 2 * * *"   # 02:30 UTC = 07:30 по Екатеринбургу
+  workflow_dispatch:        # кнопка ручного запуска
 
 jobs:
   send:
@@ -17,3 +17,4 @@ jobs:
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
+          SCHEDULE_URL: ${{ vars.SCHEDULE_URL }}
