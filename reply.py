@@ -1,10 +1,12 @@
 """Отвечает на сообщения с датой: '21.10', '21.10.2026', 'сегодня', 'завтра', 'послезавтра'.
-Запускается по расписанию (каждые ~5 минут) из GitHub Actions: забирает новые сообщения,
-отвечает и помечает их прочитанными, поэтому хранить состояние не нужно.
+
+Каждый запуск из GitHub Actions живёт ~4,5 минуты и постоянно слушает Telegram (long polling),
+поэтому ответ приходит за секунды. Запуски идут встык (cron каждые 5 минут).
 """
 import json
 import os
 import re
+import time
 import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta
@@ -14,6 +16,8 @@ import notify
 TOKEN = os.environ["BOT_TOKEN"]
 CHAT_ID = str(os.environ["CHAT_ID"])
 API = f"https://api.telegram.org/bot{TOKEN}"
+LOOP_SECONDS = int(os.getenv("LOOP_SECONDS", "270"))  # сколько секунд слушать
+POLL_TIMEOUT = 20                                      # длина одного long-poll запроса
 
 HELP = (
     "Напиши дату, и я пришлю расписание на этот день:\n"
@@ -25,7 +29,7 @@ WORDS = {"сегодня": 0, "today": 0, "завтра": 1, "tomorrow": 1, "п�
 def tg(method: str, **params) -> dict:
     data = urllib.parse.urlencode(params).encode()
     req = urllib.request.Request(f"{API}/{method}", data=data)
-    with urllib.request.urlopen(req, timeout=30) as r:
+    with urllib.request.urlopen(req, timeout=POLL_TIMEOUT + 15) as r:
         return json.load(r)
 
 
@@ -50,7 +54,8 @@ def parse_date(text: str, now: datetime):
 
 def answer(text: str) -> str:
     now = datetime.now(notify.TZ)
-    if text.strip().lower().startswith("/start") or text.strip().lower() == "/help":
+    low = text.strip().lower()
+    if low.startswith("/start") or low == "/help":
         return HELP
     date = parse_date(text, now)
     if date is None:
@@ -63,16 +68,33 @@ def answer(text: str) -> str:
 
 
 def main():
-    updates = tg("getUpdates", timeout=0).get("result", [])
-    if not updates:
-        return
-    for u in updates:
-        msg = u.get("message") or {}
-        if str(msg.get("chat", {}).get("id")) != CHAT_ID or not msg.get("text"):
-            continue  # отвечаем только владельцу
-        tg("sendMessage", chat_id=CHAT_ID, text=answer(msg["text"]))
-    # помечаем всё как прочитанное, чтобы не отвечать дважды
-    tg("getUpdates", offset=updates[-1]["update_id"] + 1, limit=1, timeout=0)
+    end = time.time() + LOOP_SECONDS
+    offset = None
+    while time.time() < end:
+        wait = max(0, min(POLL_TIMEOUT, int(end - time.time())))
+        params = {"timeout": wait}
+        if offset is not None:
+            params["offset"] = offset
+        try:
+            updates = tg("getUpdates", **params).get("result", [])
+        except Exception as e:  # сеть моргнула, пробуем снова
+            print("poll error:", e)
+            time.sleep(3)
+            continue
+        for u in updates:
+            offset = u["update_id"] + 1
+            msg = u.get("message") or {}
+            if str(msg.get("chat", {}).get("id")) != CHAT_ID or not msg.get("text"):
+                continue  # отвечаем только владельцу
+            try:
+                tg("sendMessage", chat_id=CHAT_ID, text=answer(msg["text"]))
+            except Exception as e:
+                print("send error:", e)
+    if offset is not None:  # подтверждаем прочитанное, чтобы следующий запуск не ответил повторно
+        try:
+            tg("getUpdates", offset=offset, limit=1, timeout=0)
+        except Exception as e:
+            print("confirm error:", e)
 
 
 if __name__ == "__main__":
