@@ -2,7 +2,7 @@ name: Reply to dates
 
 on:
   schedule:
-    - cron: "*/5 * * * *"   # каждые 5 минут (GitHub может опаздывать)
+    - cron: "*/5 * * * *"   # новый запуск каждые 5 минут, каждый слушает ~4,5 минуты
   workflow_dispatch:
 
 concurrency:
@@ -12,6 +12,7 @@ concurrency:
 jobs:
   reply:
     runs-on: ubuntu-latest
+    timeout-minutes: 7
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
